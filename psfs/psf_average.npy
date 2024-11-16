@@ -1,0 +1,5 @@
+import numpy as np
+
+# Create a 5x5 averaging kernel
+psf = np.ones((5, 5)) / 25
+np.save("psfs/psf_average.npy", psf)
