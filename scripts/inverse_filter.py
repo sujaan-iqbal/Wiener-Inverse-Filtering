@@ -1,50 +1,78 @@
-import numpy as np
 import cv2
-import os
+import numpy as np
+from scipy.signal import convolve2d
+from scipy.fft import fft2, ifft2
+import matplotlib.pyplot as plt
 
+# Generate Motion Blur PSF
+def generate_motion_psf(length, angle, size):
+    """Generate a motion blur Point Spread Function (PSF)."""
+    psf = np.zeros((size, size))
+    center = size // 2
+    angle_rad = np.deg2rad(angle)
+    for i in range(length):
+        x = center + int(i * np.cos(angle_rad))
+        y = center + int(i * np.sin(angle_rad))
+        if 0 <= x < size and 0 <= y < size:
+            psf[y, x] = 1
+    psf /= psf.sum()  # Normalize
+    return psf
 
-def pad_psf(psf, shape):
-    """Pad the PSF to match the image shape."""
-    padded_psf = np.zeros(shape)
-    padded_psf[:psf.shape[0], :psf.shape[1]] = psf
-    return padded_psf
+# Apply Motion Blur
+def apply_motion_blur(image, psf):
+    """Apply motion blur to each channel of a color image."""
+    blurred_channels = []
+    for channel in cv2.split(image):
+        blurred = convolve2d(channel, psf, mode="same", boundary="wrap")
+        blurred_channels.append(blurred)
+    blurred_image = cv2.merge(blurred_channels)
+    return blurred_image
 
-def restore_images(degraded_folder, restored_folder, psf_csv_path):
-    """Apply inverse filter to all images in the degraded folder."""
-    # Load the PSF from CSV
-    psf = np.loadtxt(psf_csv_path, delimiter=",")
-    
-    if not os.path.exists(restored_folder):
-        os.makedirs(restored_folder)
+# Inverse Filter Restoration
+def inverse_filter(degraded, psf, eps=1e-3):
+    """Restore an image using the inverse filter."""
+    psf_fft = fft2(psf, s=degraded.shape[:2])
+    psf_fft[np.abs(psf_fft) < eps] = eps  # Avoid division by zero
+    restored_channels = []
+    for channel in cv2.split(degraded):
+        degraded_fft = fft2(channel)
+        restored_fft = degraded_fft / psf_fft
+        restored = np.real(ifft2(restored_fft))
+        restored_channels.append(restored)
+    restored_image = cv2.merge(restored_channels)
+    return restored_image
 
-    for filename in os.listdir(degraded_folder):
-        if filename.endswith((".jpg", ".png", ".jpeg")):
-            # Load degraded image
-            img_path = os.path.join(degraded_folder, filename)
-            degraded_img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-
-            # FFT of the degraded image
-            image_fft = np.fft.fft2(degraded_img)
-
-            # Pad the PSF to match image dimensions
-            psf_padded = pad_psf(psf, degraded_img.shape)
-
-            # FFT of the PSF
-            psf_fft = np.fft.fft2(psf_padded)
-
-            # Avoid division by zero and apply inverse filter
-            restored_fft = image_fft / (psf_fft + 1e-8)
-            
-            # Inverse FFT to get the restored image
-            restored_img = np.abs(np.fft.ifft2(restored_fft))
-
-            # Rescale the image to 0-255
-            restored_img = np.clip(restored_img, 0, 255).astype(np.uint8)
-
-            # Save the restored image
-            output_path = os.path.join(restored_folder, filename)
-            cv2.imwrite(output_path, restored_img)
-            print(f"Restored image saved to {output_path}")
-
+# Main Code
 if __name__ == "__main__":
-    restore_images("degraded_images", "restored_images", "psfs/psf_average.csv")
+    # Load the original color image
+    original = cv2.imread(r"C:\Users\sujaan iqbal\OneDrive\Desktop\grpcv\zeproject\clean_images\catty2.jpg")
+    if original is None:
+        raise FileNotFoundError("Image not found. Check the file path.")
+
+    # Normalize the image to [0, 1]
+    original_normalized = original.astype(np.float32) / 255.0
+
+    # Generate the motion PSF
+    psf = generate_motion_psf(length=15, angle=30, size=25)  # Adjust length, angle, and size as needed
+
+    # Apply motion blur
+    blurred = apply_motion_blur(original_normalized, psf)
+
+    # Restore the image using the inverse filter
+    restored = inverse_filter(blurred, psf)
+
+    # Display the images using matplotlib
+    images = [original, (blurred * 255).astype(np.uint8), (restored * 255).astype(np.uint8)]
+    titles = ["Original Image", "Motion Blurred Image", "Restored Image (Inverse Filter)"]
+
+    plt.figure(figsize=(15, 5))
+    for i, (img, title) in enumerate(zip(images, titles)):
+        plt.subplot(1, 3, i + 1)
+        if i == 0:  # Original image is in BGR
+            plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        else:  # Processed images are already in RGB
+            plt.imshow(img)
+        plt.title(title)
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
